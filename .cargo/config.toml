@@ -1,0 +1,4 @@
+[alias]
+exposed = "run --bin exposed"
+hidden = "run --bin hidden"
+

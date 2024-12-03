@@ -1,0 +1,5 @@
+[workspace]
+members = ["exposed", "hidden"]
+resolver="2"
+
+

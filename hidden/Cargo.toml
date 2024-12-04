@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+tokio = { version = "1.42.0", features = ["full"] }
+relay_shared = { path = "../relay_shared" }
+serde = "1.0.215"
+bincode = "1.3.3"
+chacha20 = "0.9.1"

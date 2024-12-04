@@ -1,5 +1,3 @@
 [workspace]
-members = ["exposed", "hidden"]
-resolver="2"
-
-
+members = ["exposed", "hidden", "relay_shared"]
+resolver = "2"

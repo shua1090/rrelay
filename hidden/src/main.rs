@@ -1,5 +1,6 @@
 use bincode::config;
 use bincode::de::read;
+use clap::Parser;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::{select, spawn, task};
@@ -8,18 +9,24 @@ use std::{env, vec};
 
 use relay_shared::crypto::*;
 use relay_shared::shared_consts::CONFIG_PORT;
-use relay_shared::structs::{Connection, RelayConfig};
+use relay_shared::structs::{Connection, HiddenCmdOptions, RelayConfig};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let ip = "127.0.0.1";
+    let cmdline_options = HiddenCmdOptions::parse();
+    let relay_ip = cmdline_options.relay_ip;
+    let config_port = cmdline_options.config_port;
+    let target_port = cmdline_options.target_port;
 
     // Encryption basic setup
     let (our_secret_key, our_public_key) = generate_keypair();
     let mut chacha_key: Option<[u8; 32]> = None;
 
-    println!("Attempting to connect to config_port");
-    let mut config_socket = TcpStream::connect(format!("{ip}:{CONFIG_PORT}")).await?;
+    println!(
+        "Attempting to connect to relay server at: {}:{}",
+        relay_ip, config_port
+    );
+    let mut config_socket = TcpStream::connect(format!("{relay_ip}:{config_port}")).await?;
     println!(
         "Connected to {}. This is the exposed server, and who is relaying messages to us.",
         config_socket.peer_addr()?
@@ -72,8 +79,8 @@ async fn main() -> io::Result<()> {
             // If we got a new connection, we open up a port
             // to the relay (exposed server) and connect to it
             if let RelayConfig::NewConnection(port, uuid, connection) = relay_config {
-                let incoming_socket = TcpStream::connect(format!("{ip}:{port}")).await?;
-                spawn(handle_connection(incoming_socket, uuid));
+                let incoming_socket = TcpStream::connect(format!("{relay_ip}:{port}")).await?;
+                spawn(handle_connection(incoming_socket, uuid, target_port));
             } else {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -86,16 +93,29 @@ async fn main() -> io::Result<()> {
     Ok(())
 }
 
-async fn handle_connection(mut relay_socket: TcpStream, uuid: [u8; 32]) -> io::Result<()> {
+/**
+ * This function handles the connection between the relay and the hidden server.
+ * It reads from the relay, decrypts the message, and sends it to the target server.
+ * It also reads from the target server, encrypts the message, and sends it to the relay.
+ */
+async fn handle_connection(
+    mut relay_socket: TcpStream,
+    uuid: [u8; 32],
+    target_port: u16,
+) -> io::Result<()> {
     println!("Handling connection");
 
-    let mut target_socket = TcpStream::connect("127.0.0.1:30000").await?;
+    // This is the target server, the place
+    // that we want to reach all along, but because of the dreaded
+    // NAT we can't reach it directly
+    let mut target_socket = TcpStream::connect(format!("127.0.0.1:{}", target_port)).await?;
 
     // This cipher is used to send to the hidden server
     let mut relay_cipher_send = get_chacha20(&uuid);
     // We use this cipher to decrypt what we receive from the hidden server
     let mut relay_cipher_recv = get_chacha20(&uuid);
 
+    // Buffers for reading and writing
     let mut relay_buf = [0u8; 1024];
     let mut target_buf = [0u8; 1024];
     loop {

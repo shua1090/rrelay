@@ -1,4 +1,5 @@
 use bincode::config;
+use clap::{Args, Parser};
 use serde::Serialize;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -8,18 +9,21 @@ use std::{env, vec};
 
 use relay_shared::crypto::*;
 use relay_shared::shared_consts::{CONFIG_PORT, EXPOSED_SERVER_PORT};
-use relay_shared::structs::{Connection, RelayConfig};
+use relay_shared::structs::{Connection, RelayCmdOptions, RelayConfig};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let ip = "127.0.0.1";
+    let cmdline_options = RelayCmdOptions::parse();
+    let config_port = cmdline_options.config_port;
+    let exposed_port = cmdline_options.exposed_port;
 
     // Encryption basic setup
     let (our_secret_key, our_public_key) = generate_keypair();
     let mut chacha_key: Option<[u8; 32]> = None;
 
-    println!("Starting config server on port: {}", CONFIG_PORT);
-    let _config_listener = TcpListener::bind(format!("{ip}:{CONFIG_PORT}")).await?;
+    println!("Starting config server on port: {}", config_port);
+    println!("Once the target server connects to us (the relay), we will expose {} which forwards to the target", exposed_port);
+    let _config_listener = TcpListener::bind(format!("0.0.0.0:{config_port}")).await?;
     let (mut config_socket, _) = _config_listener.accept().await?;
     println!(
         "Accepted connection from: {}. This is the hidden server, and who we're relaying messages to.",
@@ -27,6 +31,7 @@ async fn main() -> io::Result<()> {
     );
 
     // PREPARE ENCRYPTION
+    // Via key exchange
     let mut buf = [0u8; 1024];
     let read_bytes = config_socket.read(&mut buf).await?;
     if read_bytes == 0 {
@@ -61,7 +66,11 @@ async fn main() -> io::Result<()> {
     // Setup our symmetric encryption
     let mut chacha_instance = get_chacha20(&chacha_key.unwrap());
 
-    let _data_listener = TcpListener::bind(format!("{ip}:{EXPOSED_SERVER_PORT}")).await?;
+    let _data_listener = TcpListener::bind(format!("0.0.0.0:{exposed_port}")).await?;
+    println!(
+        "Exposed server started on port: {}. Forwarding messages now.",
+        exposed_port
+    );
     loop {
         // Get incoming connections
         let (mut incoming_socket, incoming_connection_details) = _data_listener.accept().await?;
@@ -100,6 +109,11 @@ async fn main() -> io::Result<()> {
     Ok(())
 }
 
+/**
+ * This function handles the connection between the relay and the hidden server.
+ * It reads data from the incoming connection and relays it to the hidden server.
+ * It also reads data from the hidden server and relays it to the incoming connection.
+ */
 async fn handle_socket(
     mut incoming_socket: TcpStream,
     mut relay_socket: TcpStream,
@@ -119,10 +133,14 @@ async fn handle_socket(
     let mut relay_cipher_send = get_chacha20(&uuid);
     let mut relay_cipher_recv = get_chacha20(&uuid);
 
+    // Buffers for incoming and relayed data
     let mut incoming_buf = [0u8; 2048];
     let mut relay_buf = [0u8; 2048];
+
     loop {
         select! {
+            // Relay from the target connection into
+            // the relay
             result1 = incoming_socket.read(&mut incoming_buf) => {
                 let read_bytes = result1?;
                 if read_bytes <= 0 {
@@ -135,6 +153,8 @@ async fn handle_socket(
                     relay_socket.write(&data).await?;
                 }
             }
+            // Read the relayed data and forward it to
+            // the target connection
             result2 = relay_socket.read(&mut relay_buf) => {
                 let read_bytes = result2?;
                 if read_bytes <= 0 {

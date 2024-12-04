@@ -66,6 +66,16 @@ pub fn decrypt_with_chacha(chacha: &mut chacha20::ChaCha20, data: &mut [u8]) -> 
 }
 
 /**
+ * Generate Random UIUD (this
+ * is a key for chacha20)
+ */
+pub fn generate_uuid() -> [u8; 32] {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(rand::random::<[u8; 32]>());
+    hasher.finalize().into()
+}
+
+/**
  * Encrypt with a chacha instance and return the new data
  */
 pub fn apply_keystream_and_return_new(chacha: &mut chacha20::ChaCha20, data: &mut [u8]) -> Vec<u8> {

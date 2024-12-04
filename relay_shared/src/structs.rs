@@ -19,7 +19,7 @@ pub enum RelayConfig {
     // and then connect to the port
     NewConnection(
         /* port */ u16,
-        /* Connection ID */ String,
+        /* Connection ID */ [u8; 32],
         /* Connection Details */ Connection,
     ),
     // Remove connection is
@@ -29,7 +29,7 @@ pub enum RelayConfig {
     // must be closed on the hidden side
     RemoveConnection(
         /* port */ u16,
-        /* Connection ID */ String,
+        /* Connection ID */ [u8; 32],
         /* Connection Details */ Connection,
     ),
 }

@@ -2,7 +2,7 @@ use bincode::config;
 use bincode::de::read;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::{spawn, task};
+use tokio::{select, spawn, task};
 
 use std::{env, vec};
 
@@ -68,7 +68,65 @@ async fn main() -> io::Result<()> {
             let mut data = buf[..read_bytes].to_vec();
             decrypt_with_chacha(&mut chacha_instance, &mut data[..read_bytes]);
             let relay_config = bincode::deserialize::<RelayConfig>(&data[..read_bytes]).unwrap();
-            println!("Received: {:?}", relay_config);
+
+            // If we got a new connection, we open up a port
+            // to the relay (exposed server) and connect to it
+            if let RelayConfig::NewConnection(port, uuid, connection) = relay_config {
+                let incoming_socket = TcpStream::connect(format!("{ip}:{port}")).await?;
+                spawn(handle_connection(incoming_socket, uuid));
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Received invalid message; expected NewConnection",
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_connection(mut relay_socket: TcpStream, uuid: [u8; 32]) -> io::Result<()> {
+    println!("Handling connection");
+
+    let mut target_socket = TcpStream::connect("127.0.0.1:30000").await?;
+
+    // This cipher is used to send to the hidden server
+    let mut relay_cipher_send = get_chacha20(&uuid);
+    // We use this cipher to decrypt what we receive from the hidden server
+    let mut relay_cipher_recv = get_chacha20(&uuid);
+
+    let mut relay_buf = [0u8; 1024];
+    let mut target_buf = [0u8; 1024];
+    loop {
+        select! {
+            // Read from the incoming socket (relay),
+            // decrypt it, and send it to the target socket
+            result1 = relay_socket.read(&mut relay_buf) => {
+                let read_bytes = result1?;
+                if read_bytes <= 0 {
+                    println!("No bytes read from incoming socket");
+                    println!("Exiting...");
+                    return Ok(());
+                } else {
+                    let data = apply_keystream_and_return_new(&mut relay_cipher_recv, &mut relay_buf[..read_bytes]);
+                    target_socket.write(&data).await?;
+                }
+            }
+
+            // If the target socket has something to say,
+            // read it and forward it to the relay
+            result2 = target_socket.read(&mut target_buf) => {
+                let read_bytes = result2?;
+                if read_bytes <= 0 {
+                    println!("No bytes read from target socket");
+                    println!("Exiting...");
+                    return Ok(());
+                } else {
+                    let encrypted_data = apply_keystream_and_return_new(&mut relay_cipher_send, &mut target_buf[..read_bytes]);
+                    relay_socket.write(&encrypted_data).await?;
+                }
+            }
         }
     }
 

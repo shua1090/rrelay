@@ -2,7 +2,7 @@ use bincode::config;
 use serde::Serialize;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::{spawn, task};
+use tokio::{select, spawn, task};
 
 use std::{env, vec};
 
@@ -71,12 +71,12 @@ async fn main() -> io::Result<()> {
         };
 
         // Tell the hidden server about the new connection
-        // This is our relay port
+        // This is our relay port -> hidden
         let _relay_listener = TcpListener::bind("127.0.0.1:0").await?;
         let relay_port = _relay_listener.local_addr().unwrap().port();
+        let uuid = generate_uuid();
 
-        let relay_config =
-            RelayConfig::NewConnection(relay_port, String::new(), connection_details);
+        let relay_config = RelayConfig::NewConnection(relay_port, uuid, connection_details);
 
         // Write the relay config to the hidden server
         config_socket
@@ -88,24 +88,67 @@ async fn main() -> io::Result<()> {
                 .as_slice(),
             )
             .await?;
+
+        // Spawn a new task to handle the incoming connection
+        spawn(handle_socket(
+            incoming_socket,
+            _relay_listener.accept().await?.0,
+            uuid,
+        ));
     }
 
     Ok(())
 }
 
-async fn handle_socket(socket: TcpStream) -> io::Result<()> {
-    let mut buf = [0; 1024];
-    let mut socket = socket;
+async fn handle_socket(
+    mut incoming_socket: TcpStream,
+    mut relay_socket: TcpStream,
+    uuid: [u8; 32],
+) -> io::Result<()> {
+    println!(
+        "Starting connection: {}",
+        uuid.iter()
+            .map(|x| format!("{:02x}", x))
+            .collect::<String>()
+    );
 
+    // We need two ciphers
+    // since the internal state must be independent
+    // for both sending and receiving
+    // (if the order is messed up, the received/sent data might be messed up)
+    let mut relay_cipher_send = get_chacha20(&uuid);
+    let mut relay_cipher_recv = get_chacha20(&uuid);
+
+    let mut incoming_buf = [0u8; 2048];
+    let mut relay_buf = [0u8; 2048];
     loop {
-        let n = socket.read(&mut buf).await?;
-
-        if n == 0 {
-            return Ok(());
+        select! {
+            result1 = incoming_socket.read(&mut incoming_buf) => {
+                let read_bytes = result1?;
+                if read_bytes <= 0 {
+                    println!("No bytes read from incoming connection!");
+                    println!("Connection closed?");
+                    return Ok(());
+                } else {
+                    // Encrypt and relay data to the hidden server
+                    let data = apply_keystream_and_return_new(&mut relay_cipher_send, &mut incoming_buf[..read_bytes]);
+                    relay_socket.write(&data).await?;
+                }
+            }
+            result2 = relay_socket.read(&mut relay_buf) => {
+                let read_bytes = result2?;
+                if read_bytes <= 0 {
+                    println!("No bytes read from relay connection!");
+                    println!("Connection closed?");
+                    return Ok(());
+                } else {
+                    // If we got data from the hidden server
+                    // decrypt, and send it to the original incoming connections
+                    let data = apply_keystream_and_return_new(&mut relay_cipher_recv, &mut relay_buf[..read_bytes]);
+                    incoming_socket.write(&data).await?;
+                }
+            }
         }
-
-        let received_string = String::from_utf8(buf[..n].to_vec()).unwrap();
-        print!("{} says: {}", socket.peer_addr().unwrap(), received_string);
     }
-    println!("{} disconnected", socket.peer_addr().unwrap());
+    Ok(())
 }

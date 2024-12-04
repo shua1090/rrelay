@@ -3,7 +3,7 @@ use secp256k1::Secp256k1;
 use secp256k1::{PublicKey, SecretKey};
 use sha2::Digest;
 
-use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
+use chacha20::cipher::{KeyIvInit, StreamCipher};
 
 /**
  * Generate a new keypair
@@ -54,14 +54,14 @@ pub fn get_chacha20(key: &[u8]) -> chacha20::ChaCha20 {
 /**
  * Encrypt with a chacha instance
  */
-pub fn encrypt_with_chacha(chacha: &mut chacha20::ChaCha20, data: &mut [u8]) -> () {
+pub fn encrypt_with_chacha(chacha: &mut chacha20::ChaCha20, data: &mut [u8]) {
     chacha.apply_keystream(data);
 }
 
 /**
  * Decrypt with a chacha instance
  */
-pub fn decrypt_with_chacha(chacha: &mut chacha20::ChaCha20, data: &mut [u8]) -> () {
+pub fn decrypt_with_chacha(chacha: &mut chacha20::ChaCha20, data: &mut [u8]) {
     chacha.apply_keystream(data);
 }
 

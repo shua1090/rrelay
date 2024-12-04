@@ -3,8 +3,6 @@
     the client and server will use
 */
 
-use std::option;
-
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 

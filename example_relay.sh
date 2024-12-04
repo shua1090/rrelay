@@ -1,0 +1,1 @@
+cargo exposed -- --config-port 15000 --exposed-port 20000

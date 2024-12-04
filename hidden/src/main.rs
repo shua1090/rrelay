@@ -1,15 +1,10 @@
-use bincode::config;
-use bincode::de::read;
 use clap::Parser;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::{select, spawn, task};
-
-use std::{env, vec};
+use tokio::net::TcpStream;
+use tokio::{select, spawn};
 
 use relay_shared::crypto::*;
-use relay_shared::shared_consts::CONFIG_PORT;
-use relay_shared::structs::{Connection, HiddenCmdOptions, RelayConfig};
+use relay_shared::structs::{HiddenCmdOptions, RelayConfig};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -45,22 +40,20 @@ async fn main() -> io::Result<()> {
         println!("No bytes read from exposed server");
         println!("Exiting...");
         return Ok(());
-    } else {
-        if let RelayConfig::KeyExchange(received_key_bytes) =
-            bincode::deserialize::<RelayConfig>(&buf[..read_bytes]).unwrap()
-        {
-            let their_public_key = pubkey_from_bytes(received_key_bytes.as_slice());
-            let shared_secret = generate_shared_secret(&their_public_key, &our_secret_key);
+    } else if let RelayConfig::KeyExchange(received_key_bytes) =
+        bincode::deserialize::<RelayConfig>(&buf[..read_bytes]).unwrap()
+    {
+        let their_public_key = pubkey_from_bytes(received_key_bytes.as_slice());
+        let shared_secret = generate_shared_secret(&their_public_key, &our_secret_key);
 
-            println!(
-                "Arrived at shared secret: {}",
-                shared_secret.display_secret()
-            );
-            chacha_key = Some(shared_secret.secret_bytes());
-        } else {
-            println!("Failed to deserialize key exchange message");
-            return Ok(());
-        }
+        println!(
+            "Arrived at shared secret: {}",
+            shared_secret.display_secret()
+        );
+        chacha_key = Some(shared_secret.secret_bytes());
+    } else {
+        println!("Failed to deserialize key exchange message");
+        return Ok(());
     }
 
     // Set up our symmetric encryption

@@ -1,14 +1,9 @@
-use bincode::config;
-use clap::{Args, Parser};
-use serde::Serialize;
+use clap::Parser;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::{select, spawn, task};
-
-use std::{env, vec};
+use tokio::{select, spawn};
 
 use relay_shared::crypto::*;
-use relay_shared::shared_consts::{CONFIG_PORT, EXPOSED_SERVER_PORT};
 use relay_shared::structs::{Connection, RelayCmdOptions, RelayConfig};
 
 #[tokio::main]
@@ -38,29 +33,27 @@ async fn main() -> io::Result<()> {
         println!("No bytes read from hidden server");
         println!("Exiting...");
         return Ok(());
+    } else if let RelayConfig::KeyExchange(received_key_bytes) =
+        bincode::deserialize::<RelayConfig>(&buf[..read_bytes]).unwrap()
+    {
+        // We now need to exchange keys
+        let their_public_key = pubkey_from_bytes(received_key_bytes.as_slice());
+        let shared_secret = generate_shared_secret(&their_public_key, &our_secret_key);
+
+        // Send our public key to the hidden server
+        let relay_config = RelayConfig::KeyExchange(pubkey_to_bytes(&our_public_key));
+        config_socket
+            .write(&bincode::serialize(&relay_config).unwrap())
+            .await?;
+        println!(
+            "Arrived at shared secret: {}",
+            shared_secret.display_secret()
+        );
+
+        chacha_key = Some(shared_secret.secret_bytes());
     } else {
-        if let RelayConfig::KeyExchange(received_key_bytes) =
-            bincode::deserialize::<RelayConfig>(&buf[..read_bytes]).unwrap()
-        {
-            // We now need to exchange keys
-            let their_public_key = pubkey_from_bytes(received_key_bytes.as_slice());
-            let shared_secret = generate_shared_secret(&their_public_key, &our_secret_key);
-
-            // Send our public key to the hidden server
-            let relay_config = RelayConfig::KeyExchange(pubkey_to_bytes(&our_public_key));
-            config_socket
-                .write(&bincode::serialize(&relay_config).unwrap())
-                .await?;
-            println!(
-                "Arrived at shared secret: {}",
-                shared_secret.display_secret()
-            );
-
-            chacha_key = Some(shared_secret.secret_bytes());
-        } else {
-            println!("Failed to deserialize key exchange message");
-            return Ok(());
-        }
+        println!("Failed to deserialize key exchange message");
+        return Ok(());
     }
 
     // Setup our symmetric encryption
@@ -73,7 +66,7 @@ async fn main() -> io::Result<()> {
     );
     loop {
         // Get incoming connections
-        let (mut incoming_socket, incoming_connection_details) = _data_listener.accept().await?;
+        let (incoming_socket, incoming_connection_details) = _data_listener.accept().await?;
         let connection_details = Connection {
             incoming_port: incoming_connection_details.port(),
             incoming_addr: incoming_connection_details.ip().to_string(),

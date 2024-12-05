@@ -43,7 +43,7 @@ async fn main() -> io::Result<()> {
         // Send our public key to the hidden server
         let relay_config = RelayConfig::KeyExchange(pubkey_to_bytes(&our_public_key));
         config_socket
-            .write(&bincode::serialize(&relay_config).unwrap())
+            .write_all(&bincode::serialize(&relay_config).unwrap())
             .await?;
         println!(
             "Arrived at shared secret: {}",
@@ -82,7 +82,7 @@ async fn main() -> io::Result<()> {
 
         // Write the relay config to the hidden server
         config_socket
-            .write(
+            .write_all(
                 apply_keystream_and_return_new(
                     &mut chacha_instance,
                     &mut bincode::serialize(&relay_config).unwrap(),
@@ -98,8 +98,6 @@ async fn main() -> io::Result<()> {
             uuid,
         ));
     }
-
-    Ok(())
 }
 
 /**
@@ -136,32 +134,29 @@ async fn handle_socket(
             // the relay
             result1 = incoming_socket.read(&mut incoming_buf) => {
                 let read_bytes = result1?;
-                if read_bytes <= 0 {
-                    println!("No bytes read from incoming connection!");
-                    println!("Connection closed?");
+                if read_bytes == 0 {
+                    println!("Exiting...");
                     return Ok(());
                 } else {
                     // Encrypt and relay data to the hidden server
                     let data = apply_keystream_and_return_new(&mut relay_cipher_send, &mut incoming_buf[..read_bytes]);
-                    relay_socket.write(&data).await?;
+                    relay_socket.write_all(&data).await?;
                 }
             }
             // Read the relayed data and forward it to
             // the target connection
             result2 = relay_socket.read(&mut relay_buf) => {
                 let read_bytes = result2?;
-                if read_bytes <= 0 {
-                    println!("No bytes read from relay connection!");
-                    println!("Connection closed?");
+                if read_bytes == 0 {
+                    println!("Exiting...");
                     return Ok(());
                 } else {
                     // If we got data from the hidden server
                     // decrypt, and send it to the original incoming connections
                     let data = apply_keystream_and_return_new(&mut relay_cipher_recv, &mut relay_buf[..read_bytes]);
-                    incoming_socket.write(&data).await?;
+                    incoming_socket.write_all(&data).await?;
                 }
             }
         }
     }
-    Ok(())
 }

@@ -1,1 +1,1 @@
-cargo hidden -- --relay-ip 127.0.0.1 --config-port 15000 --target-port 3000
+cargo hidden -- --relay-ip 127.0.0.1 --config-port 15000 --target-port 30000

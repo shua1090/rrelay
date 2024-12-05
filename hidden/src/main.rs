@@ -32,7 +32,7 @@ async fn main() -> io::Result<()> {
     let relay_config = RelayConfig::KeyExchange(pubkey_to_bytes(&our_public_key));
 
     config_socket
-        .write(&bincode::serialize(&relay_config).unwrap())
+        .write_all(&bincode::serialize(&relay_config).unwrap())
         .await?;
 
     let read_bytes = config_socket.read(&mut buf).await?;
@@ -72,6 +72,11 @@ async fn main() -> io::Result<()> {
             // If we got a new connection, we open up a port
             // to the relay (exposed server) and connect to it
             if let RelayConfig::NewConnection(port, uuid, connection) = relay_config {
+                println!(
+                    "Received connection relay from: {}",
+                    connection.incoming_addr
+                );
+
                 let incoming_socket = TcpStream::connect(format!("{relay_ip}:{port}")).await?;
                 spawn(handle_connection(incoming_socket, uuid, target_port));
             } else {
@@ -82,8 +87,6 @@ async fn main() -> io::Result<()> {
             }
         }
     }
-
-    Ok(())
 }
 
 /**
@@ -96,8 +99,6 @@ async fn handle_connection(
     uuid: [u8; 32],
     target_port: u16,
 ) -> io::Result<()> {
-    println!("Handling connection");
-
     // This is the target server, the place
     // that we want to reach all along, but because of the dreaded
     // NAT we can't reach it directly
@@ -117,13 +118,12 @@ async fn handle_connection(
             // decrypt it, and send it to the target socket
             result1 = relay_socket.read(&mut relay_buf) => {
                 let read_bytes = result1?;
-                if read_bytes <= 0 {
-                    println!("No bytes read from incoming socket");
+                if read_bytes == 0 {
                     println!("Exiting...");
                     return Ok(());
                 } else {
                     let data = apply_keystream_and_return_new(&mut relay_cipher_recv, &mut relay_buf[..read_bytes]);
-                    target_socket.write(&data).await?;
+                    target_socket.write_all(&data).await?;
                 }
             }
 
@@ -131,17 +131,15 @@ async fn handle_connection(
             // read it and forward it to the relay
             result2 = target_socket.read(&mut target_buf) => {
                 let read_bytes = result2?;
-                if read_bytes <= 0 {
-                    println!("No bytes read from target socket");
+                if read_bytes == 0 {
                     println!("Exiting...");
                     return Ok(());
                 } else {
                     let encrypted_data = apply_keystream_and_return_new(&mut relay_cipher_send, &mut target_buf[..read_bytes]);
-                    relay_socket.write(&encrypted_data).await?;
+                    relay_socket.write_all(&encrypted_data).await?;
                 }
             }
         }
     }
-
     Ok(())
 }
